@@ -4,6 +4,7 @@ from couchpotato.core.logger import CPLog
 from couchpotato.core.helpers.encoding import tryUrlencode
 from couchpotato.core.media._base.providers.torrent.base import TorrentMagnetProvider
 from couchpotato.core.media.movie.providers.base import MovieProvider
+from requests import HTTPError
 
 log = CPLog(__name__)
 
@@ -11,7 +12,8 @@ log = CPLog(__name__)
 class Strike(TorrentMagnetProvider, MovieProvider):
 
     urls = {'search': 'https://getstrike.net/api/v2/torrents/search/?category=Movies&phrase=%s',
-            'api_docs': 'https://getstrike.net/api/'}
+            'api_docs': 'https://getstrike.net/api/',
+            'hostname': 'getstrike.net'}
 
     cat_ids = [
         (['720p'], ['720p']),
@@ -32,7 +34,17 @@ class Strike(TorrentMagnetProvider, MovieProvider):
                               media['info']['year'],
                               cat_ids)
         search_url = self.urls['search'] % tryUrlencode(query)
-        data = self.getJsonData(search_url) or {}
+        try:
+            data = self.getJsonData(search_url, show_error=False) or {}
+        except HTTPError as e:
+            status_code = e.response.status_code
+            # Let's check if it's real 404 or strike api 'No torrent found.' response.
+            if status_code == 404 and 'No torrents found.' in e.response.json()['message']:
+                log.debug('No torrent found on %s.', self.getName())
+                # Strike api sending 404 when no torrent found,
+                # because of that let's reset http_failed_request for strike.
+                self.http_failed_request[self.urls['hostname']] = 0
+            return results.append({})
 
         if isinstance(data, dict) and data.get('torrents'):
             try:
