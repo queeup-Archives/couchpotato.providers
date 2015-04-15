@@ -2,9 +2,10 @@ import traceback
 
 from couchpotato.core.logger import CPLog
 from couchpotato.core.helpers.encoding import tryUrlencode
-from couchpotato.core.helpers.variable import getIdentifier
+from couchpotato.core.helpers.variable import getIdentifier, md5
 from couchpotato.core.media._base.providers.torrent.base import TorrentMagnetProvider
 from couchpotato.core.media.movie.providers.base import MovieProvider
+import json
 
 log = CPLog(__name__)
 
@@ -40,22 +41,30 @@ class Rarbg(TorrentMagnetProvider, MovieProvider):
                   # 'min_leechers': config['min_leechers'],
                   'format': 'json'}
 
-        data = self.getJsonData(self.urls['base'] % tryUrlencode(params), show_error=False)
+        cache_key = md5(self.urls['base'] % tryUrlencode(params))
+        url = self.urls['base'] % tryUrlencode(params)
+        data = self.getCache(cache_key, url, show_error=False)
 
-        if isinstance(data, list):
-            try:
-                for release in data:
-
-                    results.append({
-                        'id': release['d'].replace('magnet:?xt=urn:btih:', '').split('&')[0],
-                        'name': release['f'],
-                        'url': release['d'],
-                    })
-
-            except KeyError:
-                log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
+        if 'Invalid token.' in data:
+            log.error('Invalid token. Exiting %s: %s', (self.getName(), traceback.format_exc()))
+        elif 'No results found' in data:
+            log.debug('No torrent found on %s.', self.getName())
         else:
-            log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
+            data = json.loads(data)
+            if isinstance(data, list):
+                try:
+                    for release in data:
+
+                        results.append({
+                            'id': release['d'].replace('magnet:?xt=urn:btih:', '').split('&')[0],
+                            'name': release['f'],
+                            'url': release['d'],
+                        })
+
+                except KeyError:
+                    log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
+            else:
+                log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
 
     def get_token(self):
         # using rarbg.com to avoid the domain delay as tokens can be requested always
