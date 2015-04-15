@@ -10,7 +10,8 @@ log = CPLog(__name__)
 
 class Strike(TorrentMagnetProvider, MovieProvider):
 
-    urls = {'search': 'https://getstrike.net/api/v2/torrents/search/?category=Movies&phrase=%s'}
+    urls = {'search': 'https://getstrike.net/api/v2/torrents/search/?category=Movies&phrase=%s',
+            'api_docs': 'https://getstrike.net/api/'}
 
     cat_ids = [
         (['720p'], ['720p']),
