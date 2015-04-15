@@ -12,6 +12,16 @@
 self.getJsonData(self.urls['search'])
 ```
 
+###Get cache:
+
+```python
+from couchpotato.core.helpers.variable import md5
+
+cache_key = md5(self.urls['search'])
+url = self.urls['search'])
+self.getCache(cache_key, url, show_error=False)
+```
+
 ###Get provider settings:
  
  * If you want to get from couchpotatoserver.ini file use section param.
@@ -52,4 +62,16 @@ cat_ids = [
 self.getCatId(quality)  # you can get list: [45, 48]
 
 ';'.join(self.getCatId(quality))  # you can get ids: 45;48
+```
+
+###Get failed request count:
+ 
+ * You can change failed requests.
+ 
+ ```python
+ self.http_failed_request[self.urls['hostname']] = 0
+ ```
+
+```python
+self.http_failed_request
 ```
