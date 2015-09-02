@@ -1,19 +1,20 @@
 import traceback
+from datetime import datetime
 
+from couchpotato import fireEvent
 from couchpotato.core.logger import CPLog
 from couchpotato.core.helpers.encoding import tryUrlencode
-from couchpotato.core.helpers.variable import getIdentifier, md5
+from couchpotato.core.helpers.variable import tryInt, getIdentifier
 from couchpotato.core.media._base.providers.torrent.base import TorrentMagnetProvider
 from couchpotato.core.media.movie.providers.base import MovieProvider
-import json
 
 log = CPLog(__name__)
 
 
 class Rarbg(TorrentMagnetProvider, MovieProvider):
 
-    urls = {'base': 'https://rarbg.com/pubapi/pubapi.php?%s',
-            'docs': 'https://rarbg.com/pubapi/apidocs.txt'}
+    urls = {'base': 'http://torrentapi.org/pubapi_v2.php?%s',
+            'docs': 'https://torrentapi.org/apidocs_v2.txt'}
 
     cat_ids = [
         (['45', '48'], ['720p']),
@@ -23,58 +24,82 @@ class Rarbg(TorrentMagnetProvider, MovieProvider):
         (['47'], ['3d']),
     ]
 
-    http_time_between_calls = 11
+    http_time_between_calls = 3
+    _token = 0
 
     def _search(self, media, quality, results):
-
-        token = self.get_token()
-        if not token:
-            log.error('No token set. Exiting %s: %s', (self.getName(), traceback.format_exc()))
+        hasresults = False
+        self.get_token()
 
         cat_ids = self.getCatId(quality)
 
         params = {'mode': 'search',
-                  'token': token,
+                  'token': self._token,
                   'search_imdb': getIdentifier(media),  # search_imdb=tt2800038
                   'category': ';'.join(cat_ids),  # category=18;41
                   'min_seeders': self.conf('minimum_seeders', section='torrent'),
                   # 'min_leechers': config['min_leechers'],
-                  'format': 'json'}
+                  'format': 'json_extended',
+                  'app_id': 'couchpotato'}
 
-        cache_key = md5(self.urls['base'] % tryUrlencode(params))
-        url = self.urls['base'] % tryUrlencode(params)
-        data = self.getCache(cache_key, url, show_error=False)
-
-        if 'Invalid token.' in data:
-            log.error('Invalid token. Exiting %s: %s', (self.getName(), traceback.format_exc()))
-        elif 'No results found' in data:
-            log.debug('No torrent found on %s.', self.getName())
-        else:
-            data = json.loads(data)
-            if isinstance(data, list):
+        if self._token != 0:
+            data = self.getJsonData(self.urls['base'] % tryUrlencode(params),
+                                    headers=self.get_request_headers())
+            if data:
+                if 'error_code' in data:
+                    if data['error'] == 'No results found':
+                        log.debug('RARBG: No results returned from Rarbg')
+                    elif data['error_code'] == 2:
+                        log.error(data['error'])
+                    else:
+                        if data['error_code'] == 10:
+                            log.error(data['error'], getIdentifier(media))
+                        else:
+                            log.error('RARBG: There is an error in the returned JSON: %s', data['error'])
+                else:
+                    hasresults = True
                 try:
-                    for release in data:
+                    if hasresults:
+                        for release in data['torrent_results']:
+                            pubdate = release['pubdate']  # .strip(' +0000')
+                            try:
+                                pubdate = datetime.strptime(pubdate, '%Y-%m-%d %H:%M:%S +0000')
+                                now = datetime.utcnow()
+                                age = (now - pubdate).days
+                            except ValueError:
+                                log.debug('RARBG: Bad pubdate')
+                                age = 0
 
-                        results.append({
-                            'id': release['d'].replace('magnet:?xt=urn:btih:', '').split('&')[0],
-                            'name': release['f'],
-                            'url': release['d'],
-                        })
-
-                except KeyError:
+                            results.append({
+                                'id': release['download'].replace('magnet:?xt=urn:btih:', '').split('&')[0],
+                                'name': release['title'],
+                                'url': release['download'],
+                                'detail_url': release['info_page'],
+                                'size': tryInt(release['size']/1048576),  # rarbg sends in bytes
+                                'seeders': tryInt(release['seeders']),
+                                'leechers': tryInt(release['leechers']),
+                                'age': tryInt(age),
+                            })
+                except RuntimeError:
                     log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
             else:
                 log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
 
     def get_token(self):
-        # using rarbg.com to avoid the domain delay as tokens can be requested always
         params = {'get_token': 'get_token',
-                  'format': 'json'}
-        r = self.getJsonData(self.urls['base'] % tryUrlencode(params))
-        token = None
-        try:
-            token = r.get('token')
-        except ValueError:
-            log.error('Could not retrieve RARBG token.')
-        log.debug('RARBG token: %s' % token)
-        return token
+                  'format': 'json',
+                  'app_id': 'couchpotato'}
+        tokendata = self.getJsonData(self.urls['base'] % tryUrlencode(params),
+                                     headers=self.get_request_headers())
+        if tokendata:
+            try:
+                token = tokendata['token']
+                if self._token != token:
+                    log.debug('RARBG: GOT TOKEN: %s', token)
+                self._token = token
+            except KeyError:
+                log.error('RARBG: Failed getting token from Rarbg: %s', traceback.format_exc())
+                self._token = 0
+
+    def get_request_headers(self):
+        return {'User-Agent': fireEvent('app.version', single=True)}
